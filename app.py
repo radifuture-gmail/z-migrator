@@ -97,6 +97,11 @@ try:
         for asset in config["assets"]:
             ticker = asset["ticker"]
             weight = asset["allocation_pct"] / 100.0
+            
+            # ★追加："type"が"Short"の場合、または意図的に空売りしたい場合はウェイトをマイナスにする
+            if asset.get("type", "Long").lower() == "short" and weight > 0:
+                weight = -weight
+
             # Seriesの形状を合わせるための処理
             if isinstance(ret_df, pd.DataFrame) and ticker in ret_df.columns:
                 portfolio_ret += ret_df[ticker] * weight
@@ -106,8 +111,8 @@ try:
         # リターンから累積の価格指数（初期値1.0）を生成
         portfolio_index = (1 + portfolio_ret).cumprod()
         return portfolio_index
-
-    df_results = pd.DataFrame(index=price_df.index)
+		
+	df_results = pd.DataFrame(index=price_df.index)
     df_results['Before_Index'] = calc_portfolio_index(price_df, config_before)
     df_results['After_Index'] = calc_portfolio_index(price_df, config_after)
 
@@ -150,19 +155,32 @@ try:
 	# --- ポートフォリオ構成の比較テーブル ---
     st.markdown("---")
     st.subheader("📋 ポートフォリオ構成の比較")
+    
+    # テーブル表示用にデータを整形するヘルパー関数
+    def prepare_display_df(config):
+        df = pd.DataFrame(config["assets"])
+        # typeがShortなら配分をマイナス表示にする
+        if "type" in df.columns:
+            df["display_pct"] = df.apply(
+                lambda x: -abs(x["allocation_pct"]) if str(x["type"]).lower() == "short" else x["allocation_pct"], 
+                axis=1
+            )
+        else:
+            df["display_pct"] = df["allocation_pct"]
+            
+        res_df = df[["ticker", "display_pct"]].copy()
+        res_df.columns = ["銘柄", "配分 (%)"]
+        return res_df.set_index("銘柄")
+
     col_table1, col_table2 = st.columns(2)
     
     with col_table1:
         st.markdown("**【Before】現在の構成**")
-        df_before = pd.DataFrame(config_before["assets"])[["ticker", "allocation_pct"]]
-        df_before.columns = ["銘柄", "配分 (%)"]
-        st.table(df_before.set_index("銘柄"))
+        st.table(prepare_display_df(config_before))
         
     with col_table2:
         st.markdown("**【After】目標の構成**")
-        df_after = pd.DataFrame(config_after["assets"])[["ticker", "allocation_pct"]]
-        df_after.columns = ["銘柄", "配分 (%)"]
-        st.table(df_after.set_index("銘柄"))
+        st.table(prepare_display_df(config_after))
 
     # チャート表示
     st.markdown("---")
