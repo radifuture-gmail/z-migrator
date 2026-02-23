@@ -156,7 +156,7 @@ try:
         fig_price = go.Figure()
         fig_price.add_trace(go.Scatter(x=valid_data.index, y=valid_data['Before_Index'], name='Before', line=dict(color='gray')))
         fig_price.add_trace(go.Scatter(x=valid_data.index, y=valid_data['After_Index'], name='After', line=dict(color='blue')))
-        fig_price.update_layout(height=350, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", ybottom=-0.2))
+        fig_price.update_layout(height=350, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=-0.2, yanchor="top", x=0.5, xanchor="center"))
         st.plotly_chart(fig_price, use_container_width=True)
 
     with col_chart2:
