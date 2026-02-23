@@ -81,7 +81,6 @@ all_tickers = list(set(get_portfolio_tickers(config_before) + get_portfolio_tick
 
 @st.cache_data(ttl=3600)
 def fetch_data(tickers):
-    # ffill()とdropna()で欠損値を処理し、分析のノイズを減らす
     data = yf.download(tickers, period="2y", auto_adjust=True)['Close'].ffill().dropna()
     return data
 
@@ -90,7 +89,6 @@ try:
         price_df = fetch_data(all_tickers)
 
     def calc_portfolio_index(price_df, config):
-        # 基準日依存をなくすため、日次リターンベースで指数化する
         ret_df = price_df.pct_change().fillna(0)
         portfolio_ret = pd.Series(0.0, index=price_df.index)
         
@@ -98,21 +96,22 @@ try:
             ticker = asset["ticker"]
             weight = asset["allocation_pct"] / 100.0
             
-            # ★追加："type"が"Short"の場合、または意図的に空売りしたい場合はウェイトをマイナスにする
-            if asset.get("type", "Long").lower() == "short" and weight > 0:
-                weight = -weight
+            # 空売りの判定（Shortの場合はリターンを反転させる）
+            if asset.get("type", "Long").lower() == "short":
+                weight = -abs(weight)
+            else:
+                weight = abs(weight)
 
-            # Seriesの形状を合わせるための処理
             if isinstance(ret_df, pd.DataFrame) and ticker in ret_df.columns:
                 portfolio_ret += ret_df[ticker] * weight
             else:
                 portfolio_ret += ret_df * weight
                 
-        # リターンから累積の価格指数（初期値1.0）を生成
         portfolio_index = (1 + portfolio_ret).cumprod()
         return portfolio_index
-		
-	df_results = pd.DataFrame(index=price_df.index)
+
+    # 指数計算
+    df_results = pd.DataFrame(index=price_df.index)
     df_results['Before_Index'] = calc_portfolio_index(price_df, config_before)
     df_results['After_Index'] = calc_portfolio_index(price_df, config_after)
 
@@ -122,7 +121,6 @@ try:
     df_results['Std'] = df_results['Log_Ratio'].rolling(window=window).std()
     df_results['Z_Score'] = (df_results['Log_Ratio'] - df_results['Mean']) / df_results['Std']
 
-    # 最新データを取得（NaNを避けるため直近の有効値）
     valid_data = df_results.dropna()
     latest = valid_data.iloc[-1]
     prev = valid_data.iloc[-2]
@@ -138,7 +136,7 @@ try:
 
     with c2:
         if current_z < -z_threshold:
-            status, color, instruction = "✅ 移行推奨 (今すぐ)", "green", "Afterポートフォリオが相対的に割安です。移行の好機です。"
+            status, color, instruction = "✅ 移行推奨 (今すぐ)", "green", "Afterが相対的に割安です。移行の好機です。"
         elif current_z > z_threshold:
             status, color, instruction = "⚠️ 待機 (移行非推奨)", "red", "Afterが相対的に割高です。Before維持を推奨。"
         else:
@@ -152,17 +150,15 @@ try:
             st.write("**Before:**", ", ".join(get_portfolio_tickers(config_before)))
             st.write("**After:**", ", ".join(get_portfolio_tickers(config_after)))
 
-	# --- ポートフォリオ構成の比較テーブル ---
+    # --- ポートフォリオ構成の比較テーブル ---
     st.markdown("---")
     st.subheader("📋 ポートフォリオ構成の比較")
     
-    # テーブル表示用にデータを整形するヘルパー関数
     def prepare_display_df(config):
         df = pd.DataFrame(config["assets"])
-        # typeがShortなら配分をマイナス表示にする
         if "type" in df.columns:
             df["display_pct"] = df.apply(
-                lambda x: -abs(x["allocation_pct"]) if str(x["type"]).lower() == "short" else x["allocation_pct"], 
+                lambda x: -abs(x["allocation_pct"]) if str(x["type"]).lower() == "short" else abs(x["allocation_pct"]), 
                 axis=1
             )
         else:
@@ -173,11 +169,9 @@ try:
         return res_df.set_index("銘柄")
 
     col_table1, col_table2 = st.columns(2)
-    
     with col_table1:
         st.markdown("**【Before】現在の構成**")
         st.table(prepare_display_df(config_before))
-        
     with col_table2:
         st.markdown("**【After】目標の構成**")
         st.table(prepare_display_df(config_after))
@@ -198,8 +192,8 @@ try:
         st.subheader("移行タイミング指標 (Z-Score)")
         fig_z = go.Figure()
         fig_z.add_trace(go.Scatter(x=valid_data.index, y=valid_data['Z_Score'], name='Z-Score', fill='tozeroy'))
-        fig_z.add_hline(y=-z_threshold, line_dash="dash", line_color="green", annotation_text="割安 (移行推奨)")
-        fig_z.add_hline(y=z_threshold, line_dash="dash", line_color="red", annotation_text="割高 (待機)")
+        fig_z.add_hline(y=-z_threshold, line_dash="dash", line_color="green", annotation_text="割安")
+        fig_z.add_hline(y=z_threshold, line_dash="dash", line_color="red", annotation_text="割高")
         fig_z.update_layout(height=350, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig_z, use_container_width=True)
 
@@ -208,8 +202,7 @@ except Exception as e:
 
 # --- 5. 実践！移行実行＆コストシミュレーター ---
 st.markdown("---")
-st.header("🧮 移行実行シミュレーター (税金・手数料考慮)")
-st.write("ポートフォリオを移行する際にかかる税金や手数料を差し引いた「真の再投資可能額」を計算します。")
+st.header("🧮 移行実行シミュレーター")
 
 col_s1, col_s2, col_s3, col_s4 = st.columns(4)
 with col_s1:
@@ -222,25 +215,20 @@ with col_s4:
     fee_rate = st.number_input("売買手数料率 (%)", value=0.5, step=0.1) / 100.0
 
 if st.button("移行後の目標保有額を計算", type="primary"):
-    # コスト計算
     tax_cost = max(0, unrealized_gain) * tax_rate
-    fee_cost = current_value * fee_rate # 売却時手数料 + 買付時手数料を簡易的に売却額ベースで計算
+    fee_cost = current_value * fee_rate
     net_value = current_value - tax_cost - fee_cost
     
     st.markdown("### 💰 資金の推移")
     c_res1, c_res2, c_res3 = st.columns(3)
     c_res1.metric("移行前 総資産", f"${current_value:,.2f}")
-    c_res2.metric("移行コスト (税金 + 手数料)", f"-${(tax_cost + fee_cost):,.2f}", delta_color="inverse")
-    c_res3.metric("再投資可能額 (Net Amount)", f"${net_value:,.2f}")
+    c_res2.metric("移行コスト", f"-${(tax_cost + fee_cost):,.2f}", delta_color="inverse")
+    c_res3.metric("再投資可能額", f"${net_value:,.2f}")
     
-    if (tax_cost + fee_cost) / current_value > 0.05:
-         st.warning("⚠️ 移行コストが総資産の5%を超えています。Z-Scoreが示す割安感がこのコストを上回るか、慎重に検討してください。")
-
-    st.markdown("### 🎯 移行後の目標買付額 (After構成)")
+    st.markdown("### 🎯 移行後の目標買付額")
     calc_cols = st.columns(len(config_after["assets"]))
     for i, asset in enumerate(config_after["assets"]):
         target_amt = net_value * (asset["allocation_pct"] / 100.0)
         with calc_cols[i]:
             st.success(f"**{asset['ticker']}**")
             st.write(f"買付額: **${target_amt:,.2f}**")
-            st.caption(f"配分: {asset['allocation_pct']}%")
