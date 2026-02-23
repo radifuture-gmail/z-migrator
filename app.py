@@ -147,6 +147,23 @@ try:
             st.write("**Before:**", ", ".join(get_portfolio_tickers(config_before)))
             st.write("**After:**", ", ".join(get_portfolio_tickers(config_after)))
 
+    # 構成の比較テーブル
+    st.markdown("---")
+    st.subheader("📋 ポートフォリオ構成の比較")
+    col_table1, col_table2 = st.columns(2)
+    with col_table1:
+        st.markdown("**【Before】現在の構成**")
+        df_before = pd.DataFrame(config_before["assets"])[["ticker", "allocation_pct"]]
+        df_before.columns = ["銘柄", "配分 (%)"]
+        st.table(df_before.set_index("銘柄"))
+        st.info(f"合計投資額: ${config_before.get('total_investment', 0):,.2f}")
+    with col_table2:
+        st.markdown("**【After】目標の構成**")
+        df_after = pd.DataFrame(config_after["assets"])[["ticker", "allocation_pct"]]
+        df_after.columns = ["銘柄", "配分 (%)"]
+        st.table(df_after.set_index("銘柄"))
+        st.info(f"合計投資額: ${config_after.get('total_investment', 0):,.2f}")
+
     # チャート表示
     st.markdown("---")
     col_chart1, col_chart2 = st.columns(2)
@@ -156,7 +173,7 @@ try:
         fig_price = go.Figure()
         fig_price.add_trace(go.Scatter(x=valid_data.index, y=valid_data['Before_Index'], name='Before', line=dict(color='gray')))
         fig_price.add_trace(go.Scatter(x=valid_data.index, y=valid_data['After_Index'], name='After', line=dict(color='blue')))
-        fig_price.update_layout(height=350, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=-0.2, yanchor="top", x=0.5, xanchor="center"))
+        fig_price.update_layout(height=350, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", ybottom=-0.2))
         st.plotly_chart(fig_price, use_container_width=True)
 
     with col_chart2:
