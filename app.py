@@ -13,34 +13,66 @@ st.set_page_config(page_title="Portfolio Migration Analyzer", layout="wide")
 # --- ユーティリティ関数 ---
 def decode_base64_to_json(b64_str):
     try:
-        # URLエンコードされた%3Dなどをデコードしてからbase64復号
         padding = '=' * (4 - len(b64_str) % 4)
         json_str = base64.b64decode(b64_str + padding).decode('utf-8')
         return json.loads(json_str)
-    except Exception as e:
+    except Exception:
         return None
+
+def encode_json_to_base64(data_dict):
+    json_str = json.dumps(data_dict)
+    return base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
 
 def get_portfolio_tickers(config):
     if not config or "assets" not in config:
         return []
     return [asset["ticker"] for asset in config["assets"]]
 
-# --- 1. 初期設定とデータ読み込み ---
-st.title("🔄 ポートフォリオ移行タイミング判定 (Z-Score)")
+# --- 1. URLパラメータからの読み込みと初期値設定 ---
 
-# デフォルトのBase64（提示されたもの）
+# デフォルト値
 default_b64_before = "eyJ0b3RhbF9pbnZlc3RtZW50IjogMTAwMDAuMCwgInJpc2tfZnJlZV9yYXRlIjogMC4wLCAicmViYWxhbmNlX2ZyZXEiOiAiV2Vla2x5IiwgInN0YXJ0X2RhdGUiOiAiMjAyNS0wMi0yMyIsICJhc3NldHMiOiBbeyJ0aWNrZXIiOiAiU1BZIiwgInR5cGUiOiAiTG9uZyIsICJhbGxvY2F0aW9uX3BjdCI6IDUwLjAsICJtYXJnaW5fcmF0aW8iOiAxMDAuMH0sIHsidGlja2VyIjogIlRMVCIsICJ0eXBlIjogIkxvbmciLCAiYWxsb2NhdGlvbl9wY3QiOiAzMC4wLCAibWFyZ2luX3JhdGlvIjogMTAwLjB9XX0="
-# サンプル用After（QQQとGLDの構成例）
 default_b64_after = "eyJ0b3RhbF9pbnZlc3RtZW50IjogMTAwMDAuMCwgInJpc2tfZnJlZV9yYXRlIjogMC4wLCAicmViYWxhbmNlX2ZyZXEiOiAiV2Vla2x5IiwgInN0YXJ0X2RhdGUiOiAiMjAyNS0wMi0yMyIsICJhc3NldHMiOiBbeyJ0aWNrZXIiOiAiUVFRIiwgInR5cGUiOiAiTG9uZyIsICJhbGxvY2F0aW9uX3BjdCI6IDcwLjAsICJtYXJnaW5fcmF0aW8iOiAxMDAuMH0sIHsidGlja2VyIjogIkdMRCIsICJ0eXBlIjogIkxvbmciLCAiYWxsb2NhdGlvbl9wY3QiOiAzMC4wLCAibWFyZ2luX3JhdGlvIjogMTAwLjB9XX0="
 
+init_values = {
+    "before": default_b64_before,
+    "after": default_b64_after,
+    "window": 120,
+    "z_threshold": 1.0
+}
+
+# URLに config パラメータがあれば上書き
+query_params = st.query_params
+if "config" in query_params:
+    decoded_config = decode_base64_to_json(query_params["config"])
+    if decoded_config:
+        init_values.update(decoded_config)
+        st.toast("URLから設定を読み込みました！", icon="✅")
+
+st.title("🔄 ポートフォリオ移行タイミング判定 (Z-Score)")
+
+# --- 2. サイドバー設定 ---
 with st.sidebar:
     st.header("⚙️ 設定")
-    window = st.slider("分析期間 (移動平均日数)", 50, 300, 120)
-    z_threshold = st.slider("移行判断しきい値 (Zスコア)", 0.5, 3.0, 1.0, 0.1)
+    window = st.slider("分析期間 (移動平均日数)", 50, 300, value=int(init_values["window"]))
+    z_threshold = st.slider("移行判断しきい値 (Zスコア)", 0.5, 3.0, value=float(init_values["z_threshold"]), step=0.1)
     
     st.markdown("---")
-    b64_before_input = st.text_area("Before ポートフォリオ (Base64)", default_b64_before, height=100)
-    b64_after_input = st.text_area("After ポートフォリオ (Base64)", default_b64_after, height=100)
+    b64_before_input = st.text_area("Before ポートフォリオ (Base64)", value=init_values["before"], height=100)
+    b64_after_input = st.text_area("After ポートフォリオ (Base64)", value=init_values["after"], height=100)
+
+    # 保存ボタン
+    st.markdown("---")
+    if st.button("現在の構成をURLに保存"):
+        current_config = {
+            "before": b64_before_input,
+            "after": b64_after_input,
+            "window": window,
+            "z_threshold": z_threshold
+        }
+        b64_url_param = encode_json_to_base64(current_config)
+        st.query_params["config"] = b64_url_param
+        st.success("URLに保存しました。ブラウザのアドレスバーをコピーしてください。")
 
 # デコード実行
 config_before = decode_base64_to_json(b64_before_input)
@@ -50,7 +82,7 @@ if not config_before or not config_after:
     st.error("Base64データのデコードに失敗しました。正しい形式か確認してください。")
     st.stop()
 
-# --- 2. データ取得とポートフォリオ指数の計算 ---
+# --- 3. データ取得とポートフォリオ指数の計算 ---
 all_tickers = list(set(get_portfolio_tickers(config_before) + get_portfolio_tickers(config_after)))
 
 @st.cache_data(ttl=3600)
@@ -62,13 +94,11 @@ try:
     with st.spinner('市場データを取得中...'):
         price_df = fetch_data(all_tickers)
 
-    # 各ポートフォリオの加重平均価格（指数）を算出
     def calc_portfolio_index(price_df, config):
         portfolio_price = pd.Series(0.0, index=price_df.index)
         for asset in config["assets"]:
             ticker = asset["ticker"]
             weight = asset["allocation_pct"] / 100.0
-            # 初日の価格で標準化して、構成比率を掛ける
             normalized_series = price_df[ticker] / price_df[ticker].iloc[0]
             portfolio_price += normalized_series * weight
         return portfolio_price
@@ -77,9 +107,7 @@ try:
     df_results['Before_Index'] = calc_portfolio_index(price_df, config_before)
     df_results['After_Index'] = calc_portfolio_index(price_df, config_after)
 
-    # --- 3. 移行判定ロジック (Z-Score) ---
-    # Log Ratio: log(After) - log(Before) 
-    # これがマイナスに振れる = AfterがBeforeに対して割安
+    # 移行判定ロジック (Z-Score)
     df_results['Log_Ratio'] = np.log(df_results['After_Index']) - np.log(df_results['Before_Index'])
     df_results['Mean'] = df_results['Log_Ratio'].rolling(window=window).mean()
     df_results['Std'] = df_results['Log_Ratio'].rolling(window=window).std()
@@ -103,31 +131,26 @@ try:
         elif current_z > z_threshold:
             status, color, instruction = "⚠️ 待機 (移行非推奨)", "red", "Afterが相対的に割高です。Before維持を推奨。"
         else:
-            status, color, instruction = "☕ ニュートラル", "gray", "大きな乖離はありません。計画通りの移行を検討してください。"
+            status, color, instruction = "☕ ニュートラル", "gray", "大きな乖離はありません。"
         
         st.markdown(f"### 判定: :{color}[{status}]")
         st.write(instruction)
 
     with c3:
-        # 構成銘柄の確認
         with st.expander("構成銘柄を確認"):
             st.write("**Before:**", ", ".join(get_portfolio_tickers(config_before)))
             st.write("**After:**", ", ".join(get_portfolio_tickers(config_after)))
 
-
-    # --- ポートフォリオ構成の比較テーブル ---
+    # 構成の比較テーブル
     st.markdown("---")
     st.subheader("📋 ポートフォリオ構成の比較")
-
     col_table1, col_table2 = st.columns(2)
-
     with col_table1:
         st.markdown("**【Before】現在の構成**")
         df_before = pd.DataFrame(config_before["assets"])[["ticker", "allocation_pct"]]
         df_before.columns = ["銘柄", "配分 (%)"]
         st.table(df_before.set_index("銘柄"))
         st.info(f"合計投資額: ${config_before.get('total_investment', 0):,.2f}")
-
     with col_table2:
         st.markdown("**【After】目標の構成**")
         df_after = pd.DataFrame(config_after["assets"])[["ticker", "allocation_pct"]]
@@ -135,20 +158,19 @@ try:
         st.table(df_after.set_index("銘柄"))
         st.info(f"合計投資額: ${config_after.get('total_investment', 0):,.2f}")
 
-
-    # --- 5. チャート表示 ---
+    # チャート表示
     st.markdown("---")
-    st.subheader("価格指数の比較 (開始日を1.0として正規化)")
+    st.subheader("価格指数の比較")
     fig_price = go.Figure()
-    fig_price.add_trace(go.Scatter(x=df_results.index, y=df_results['Before_Index'], name='Before Portfolio', line=dict(color='gray')))
-    fig_price.add_trace(go.Scatter(x=df_results.index, y=df_results['After_Index'], name='After Portfolio', line=dict(color='blue')))
+    fig_price.add_trace(go.Scatter(x=df_results.index, y=df_results['Before_Index'], name='Before', line=dict(color='gray')))
+    fig_price.add_trace(go.Scatter(x=df_results.index, y=df_results['After_Index'], name='After', line=dict(color='blue')))
     fig_price.update_layout(height=400, margin=dict(l=0, r=0, t=20, b=0))
     st.plotly_chart(fig_price, use_container_width=True)
 
     st.subheader("移行タイミング指標 (Z-Score)")
     fig_z = go.Figure()
     fig_z.add_trace(go.Scatter(x=df_results.index, y=df_results['Z_Score'], name='Z-Score', fill='tozeroy'))
-    fig_z.add_hline(y=-z_threshold, line_dash="dash", line_color="green", annotation_text="移行推奨ライン")
+    fig_z.add_hline(y=-z_threshold, line_dash="dash", line_color="green", annotation_text="移行推奨")
     fig_z.add_hline(y=z_threshold, line_dash="dash", line_color="red")
     fig_z.update_layout(height=300, margin=dict(l=0, r=0, t=20, b=0))
     st.plotly_chart(fig_z, use_container_width=True)
@@ -156,7 +178,7 @@ try:
 except Exception as e:
     st.error(f"分析中にエラーが発生しました: {e}")
 
-# --- 6. リバランス/移行シミュレーター ---
+# シミュレーター
 st.markdown("---")
 st.header("🧮 移行実行シミュレーター")
 
