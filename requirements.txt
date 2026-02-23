@@ -1,0 +1,10 @@
+# 基本フレームワーク
+streamlit
+
+# データ取得・解析
+yfinance
+pandas
+numpy
+
+# グラフ描画
+plotly
