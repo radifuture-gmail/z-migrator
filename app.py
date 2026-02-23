@@ -5,9 +5,8 @@ import numpy as np
 import plotly.graph_objects as go
 import base64
 import json
-from datetime import datetime, timedelta
 
-# ページ設定
+# --- ページ設定 ---
 st.set_page_config(page_title="Portfolio Migration Analyzer", layout="wide")
 
 # --- ユーティリティ関数 ---
@@ -29,8 +28,6 @@ def get_portfolio_tickers(config):
     return [asset["ticker"] for asset in config["assets"]]
 
 # --- 1. URLパラメータからの読み込みと初期値設定 ---
-
-# デフォルト値
 default_b64_before = "eyJ0b3RhbF9pbnZlc3RtZW50IjogMTAwMDAuMCwgInJpc2tfZnJlZV9yYXRlIjogMC4wLCAicmViYWxhbmNlX2ZyZXEiOiAiV2Vla2x5IiwgInN0YXJ0X2RhdGUiOiAiMjAyNS0wMi0yMyIsICJhc3NldHMiOiBbeyJ0aWNrZXIiOiAiU1BZIiwgInR5cGUiOiAiTG9uZyIsICJhbGxvY2F0aW9uX3BjdCI6IDUwLjAsICJtYXJnaW5fcmF0aW8iOiAxMDAuMH0sIHsidGlja2VyIjogIlRMVCIsICJ0eXBlIjogIkxvbmciLCAiYWxsb2NhdGlvbl9wY3QiOiAzMC4wLCAibWFyZ2luX3JhdGlvIjogMTAwLjB9XX0="
 default_b64_after = "eyJ0b3RhbF9pbnZlc3RtZW50IjogMTAwMDAuMCwgInJpc2tfZnJlZV9yYXRlIjogMC4wLCAicmViYWxhbmNlX2ZyZXEiOiAiV2Vla2x5IiwgInN0YXJ0X2RhdGUiOiAiMjAyNS0wMi0yMyIsICJhc3NldHMiOiBbeyJ0aWNrZXIiOiAiUVFRIiwgInR5cGUiOiAiTG9uZyIsICJhbGxvY2F0aW9uX3BjdCI6IDcwLjAsICJtYXJnaW5fcmF0aW8iOiAxMDAuMH0sIHsidGlja2VyIjogIkdMRCIsICJ0eXBlIjogIkxvbmciLCAiYWxsb2NhdGlvbl9wY3QiOiAzMC4wLCAibWFyZ2luX3JhdGlvIjogMTAwLjB9XX0="
 
@@ -41,7 +38,6 @@ init_values = {
     "z_threshold": 1.0
 }
 
-# URLに config パラメータがあれば上書き
 query_params = st.query_params
 if "config" in query_params:
     decoded_config = decode_base64_to_json(query_params["config"])
@@ -61,7 +57,6 @@ with st.sidebar:
     b64_before_input = st.text_area("Before ポートフォリオ (Base64)", value=init_values["before"], height=100)
     b64_after_input = st.text_area("After ポートフォリオ (Base64)", value=init_values["after"], height=100)
 
-    # 保存ボタン
     st.markdown("---")
     if st.button("現在の構成をURLに保存"):
         current_config = {
@@ -74,7 +69,6 @@ with st.sidebar:
         st.query_params["config"] = b64_url_param
         st.success("URLに保存しました。ブラウザのアドレスバーをコピーしてください。")
 
-# デコード実行
 config_before = decode_base64_to_json(b64_before_input)
 config_after = decode_base64_to_json(b64_after_input)
 
@@ -87,7 +81,8 @@ all_tickers = list(set(get_portfolio_tickers(config_before) + get_portfolio_tick
 
 @st.cache_data(ttl=3600)
 def fetch_data(tickers):
-    data = yf.download(tickers, period="2y", auto_adjust=True)['Close']
+    # ffill()とdropna()で欠損値を処理し、分析のノイズを減らす
+    data = yf.download(tickers, period="2y", auto_adjust=True)['Close'].ffill().dropna()
     return data
 
 try:
@@ -95,30 +90,41 @@ try:
         price_df = fetch_data(all_tickers)
 
     def calc_portfolio_index(price_df, config):
-        portfolio_price = pd.Series(0.0, index=price_df.index)
+        # 基準日依存をなくすため、日次リターンベースで指数化する
+        ret_df = price_df.pct_change().fillna(0)
+        portfolio_ret = pd.Series(0.0, index=price_df.index)
+        
         for asset in config["assets"]:
             ticker = asset["ticker"]
             weight = asset["allocation_pct"] / 100.0
-            normalized_series = price_df[ticker] / price_df[ticker].iloc[0]
-            portfolio_price += normalized_series * weight
-        return portfolio_price
+            # Seriesの形状を合わせるための処理
+            if isinstance(ret_df, pd.DataFrame) and ticker in ret_df.columns:
+                portfolio_ret += ret_df[ticker] * weight
+            else:
+                portfolio_ret += ret_df * weight
+                
+        # リターンから累積の価格指数（初期値1.0）を生成
+        portfolio_index = (1 + portfolio_ret).cumprod()
+        return portfolio_index
 
     df_results = pd.DataFrame(index=price_df.index)
     df_results['Before_Index'] = calc_portfolio_index(price_df, config_before)
     df_results['After_Index'] = calc_portfolio_index(price_df, config_after)
 
     # 移行判定ロジック (Z-Score)
-    df_results['Log_Ratio'] = np.log(df_results['After_Index']) - np.log(df_results['Before_Index'])
+    df_results['Log_Ratio'] = np.log(df_results['After_Index'] / df_results['Before_Index'])
     df_results['Mean'] = df_results['Log_Ratio'].rolling(window=window).mean()
     df_results['Std'] = df_results['Log_Ratio'].rolling(window=window).std()
     df_results['Z_Score'] = (df_results['Log_Ratio'] - df_results['Mean']) / df_results['Std']
 
-    latest = df_results.iloc[-1]
-    prev = df_results.iloc[-2]
+    # 最新データを取得（NaNを避けるため直近の有効値）
+    valid_data = df_results.dropna()
+    latest = valid_data.iloc[-1]
+    prev = valid_data.iloc[-2]
     current_z = latest['Z_Score']
 
     # --- 4. メイン表示 ---
-    st.subheader("分析結果")
+    st.subheader("📊 分析結果")
     c1, c2, c3 = st.columns(3)
     
     with c1:
@@ -131,7 +137,7 @@ try:
         elif current_z > z_threshold:
             status, color, instruction = "⚠️ 待機 (移行非推奨)", "red", "Afterが相対的に割高です。Before維持を推奨。"
         else:
-            status, color, instruction = "☕ ニュートラル", "gray", "大きな乖離はありません。"
+            status, color, instruction = "☕ ニュートラル", "gray", "統計的な大きな乖離はありません。"
         
         st.markdown(f"### 判定: :{color}[{status}]")
         st.write(instruction)
@@ -141,59 +147,65 @@ try:
             st.write("**Before:**", ", ".join(get_portfolio_tickers(config_before)))
             st.write("**After:**", ", ".join(get_portfolio_tickers(config_after)))
 
-    # 構成の比較テーブル
-    st.markdown("---")
-    st.subheader("📋 ポートフォリオ構成の比較")
-    col_table1, col_table2 = st.columns(2)
-    with col_table1:
-        st.markdown("**【Before】現在の構成**")
-        df_before = pd.DataFrame(config_before["assets"])[["ticker", "allocation_pct"]]
-        df_before.columns = ["銘柄", "配分 (%)"]
-        st.table(df_before.set_index("銘柄"))
-        st.info(f"合計投資額: ${config_before.get('total_investment', 0):,.2f}")
-    with col_table2:
-        st.markdown("**【After】目標の構成**")
-        df_after = pd.DataFrame(config_after["assets"])[["ticker", "allocation_pct"]]
-        df_after.columns = ["銘柄", "配分 (%)"]
-        st.table(df_after.set_index("銘柄"))
-        st.info(f"合計投資額: ${config_after.get('total_investment', 0):,.2f}")
-
     # チャート表示
     st.markdown("---")
-    st.subheader("価格指数の比較")
-    fig_price = go.Figure()
-    fig_price.add_trace(go.Scatter(x=df_results.index, y=df_results['Before_Index'], name='Before', line=dict(color='gray')))
-    fig_price.add_trace(go.Scatter(x=df_results.index, y=df_results['After_Index'], name='After', line=dict(color='blue')))
-    fig_price.update_layout(height=400, margin=dict(l=0, r=0, t=20, b=0))
-    st.plotly_chart(fig_price, use_container_width=True)
+    col_chart1, col_chart2 = st.columns(2)
+    
+    with col_chart1:
+        st.subheader("価格指数の比較 (基準日=1.0)")
+        fig_price = go.Figure()
+        fig_price.add_trace(go.Scatter(x=valid_data.index, y=valid_data['Before_Index'], name='Before', line=dict(color='gray')))
+        fig_price.add_trace(go.Scatter(x=valid_data.index, y=valid_data['After_Index'], name='After', line=dict(color='blue')))
+        fig_price.update_layout(height=350, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", ybottom=-0.2))
+        st.plotly_chart(fig_price, use_container_width=True)
 
-    st.subheader("移行タイミング指標 (Z-Score)")
-    fig_z = go.Figure()
-    fig_z.add_trace(go.Scatter(x=df_results.index, y=df_results['Z_Score'], name='Z-Score', fill='tozeroy'))
-    fig_z.add_hline(y=-z_threshold, line_dash="dash", line_color="green", annotation_text="移行推奨")
-    fig_z.add_hline(y=z_threshold, line_dash="dash", line_color="red")
-    fig_z.update_layout(height=300, margin=dict(l=0, r=0, t=20, b=0))
-    st.plotly_chart(fig_z, use_container_width=True)
+    with col_chart2:
+        st.subheader("移行タイミング指標 (Z-Score)")
+        fig_z = go.Figure()
+        fig_z.add_trace(go.Scatter(x=valid_data.index, y=valid_data['Z_Score'], name='Z-Score', fill='tozeroy'))
+        fig_z.add_hline(y=-z_threshold, line_dash="dash", line_color="green", annotation_text="割安 (移行推奨)")
+        fig_z.add_hline(y=z_threshold, line_dash="dash", line_color="red", annotation_text="割高 (待機)")
+        fig_z.update_layout(height=350, margin=dict(l=0, r=0, t=30, b=0))
+        st.plotly_chart(fig_z, use_container_width=True)
 
 except Exception as e:
     st.error(f"分析中にエラーが発生しました: {e}")
 
-# シミュレーター
+# --- 5. 実践！移行実行＆コストシミュレーター ---
 st.markdown("---")
-st.header("🧮 移行実行シミュレーター")
+st.header("🧮 移行実行シミュレーター (税金・手数料考慮)")
+st.write("ポートフォリオを移行する際にかかる税金や手数料を差し引いた「真の再投資可能額」を計算します。")
 
-col_s1, col_s2 = st.columns(2)
+col_s1, col_s2, col_s3, col_s4 = st.columns(4)
 with col_s1:
-    current_value = st.number_input("現在の運用総額 (USD)", value=float(config_before.get("total_investment", 10000.0)))
-    
+    current_value = st.number_input("現在の運用総額 (USD)", value=float(config_before.get("total_investment", 10000.0)), step=1000.0)
 with col_s2:
-    st.info("移行後の目標構成（After）に基づく必要額を表示します。")
+    unrealized_gain = st.number_input("うち含み益 (USD)", value=2000.0, step=500.0)
+with col_s3:
+    tax_rate = st.number_input("譲渡益税率 (%)", value=20.315, step=1.0) / 100.0
+with col_s4:
+    fee_rate = st.number_input("売買手数料率 (%)", value=0.5, step=0.1) / 100.0
 
-if st.button("移行に必要な売買を算出"):
-    st.write("### 移行後の目標保有額")
+if st.button("移行後の目標保有額を計算", type="primary"):
+    # コスト計算
+    tax_cost = max(0, unrealized_gain) * tax_rate
+    fee_cost = current_value * fee_rate # 売却時手数料 + 買付時手数料を簡易的に売却額ベースで計算
+    net_value = current_value - tax_cost - fee_cost
+    
+    st.markdown("### 💰 資金の推移")
+    c_res1, c_res2, c_res3 = st.columns(3)
+    c_res1.metric("移行前 総資産", f"${current_value:,.2f}")
+    c_res2.metric("移行コスト (税金 + 手数料)", f"-${(tax_cost + fee_cost):,.2f}", delta_color="inverse")
+    c_res3.metric("再投資可能額 (Net Amount)", f"${net_value:,.2f}")
+    
+    if (tax_cost + fee_cost) / current_value > 0.05:
+         st.warning("⚠️ 移行コストが総資産の5%を超えています。Z-Scoreが示す割安感がこのコストを上回るか、慎重に検討してください。")
+
+    st.markdown("### 🎯 移行後の目標買付額 (After構成)")
     calc_cols = st.columns(len(config_after["assets"]))
     for i, asset in enumerate(config_after["assets"]):
-        target_amt = current_value * (asset["allocation_pct"] / 100.0)
+        target_amt = net_value * (asset["allocation_pct"] / 100.0)
         with calc_cols[i]:
-            st.metric(asset["ticker"], f"${target_amt:,.2f}")
+            st.success(f"**{asset['ticker']}**")
+            st.write(f"買付額: **${target_amt:,.2f}**")
             st.caption(f"配分: {asset['allocation_pct']}%")
