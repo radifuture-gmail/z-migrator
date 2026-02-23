@@ -147,22 +147,22 @@ try:
             st.write("**Before:**", ", ".join(get_portfolio_tickers(config_before)))
             st.write("**After:**", ", ".join(get_portfolio_tickers(config_after)))
 
-    # 構成の比較テーブル
+	# --- ポートフォリオ構成の比較テーブル ---
     st.markdown("---")
     st.subheader("📋 ポートフォリオ構成の比較")
     col_table1, col_table2 = st.columns(2)
+    
     with col_table1:
         st.markdown("**【Before】現在の構成**")
         df_before = pd.DataFrame(config_before["assets"])[["ticker", "allocation_pct"]]
         df_before.columns = ["銘柄", "配分 (%)"]
         st.table(df_before.set_index("銘柄"))
-        st.info(f"合計投資額: ${config_before.get('total_investment', 0):,.2f}")
+        
     with col_table2:
         st.markdown("**【After】目標の構成**")
         df_after = pd.DataFrame(config_after["assets"])[["ticker", "allocation_pct"]]
         df_after.columns = ["銘柄", "配分 (%)"]
         st.table(df_after.set_index("銘柄"))
-        st.info(f"合計投資額: ${config_after.get('total_investment', 0):,.2f}")
 
     # チャート表示
     st.markdown("---")
